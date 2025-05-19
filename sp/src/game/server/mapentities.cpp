@@ -29,6 +29,9 @@ struct HierarchicalSpawnMapData_t
 	int			m_iMapDataLength;
 };
 
+bool g_bShouldMapOverride = false;
+KeyValues* g_pMapReplaceKV;
+
 static CStringRegistry *g_pClassnameSpawnPriority = NULL;
 extern edict_t *g_pForceAttachEdict;
 
@@ -160,7 +163,7 @@ static void ComputeSpawnHierarchyDepth( int nEntities, HierarchicalSpawn_t *pSpa
 		else
 		{
 			pSpawnList[nEntity].m_nDepth = 1;
-		}
+		}	
 	}
 }
 
@@ -301,6 +304,114 @@ void SpawnAllEntities( int nEntities, HierarchicalSpawn_t *pSpawnList, bool bAct
 		}
 		mdlcache->SetAsyncLoad( MDLCACHE_ANIMBLOCK, bAsyncAnims );
 	}
+}
+
+//-----------------------------------------------------------------------------
+// Purpose:
+// Output: Returns true on if loaded custom map edit values, false on if load failed.
+//-----------------------------------------------------------------------------
+bool MapEntity_ShouldMapOverride() 
+{
+	return g_bShouldMapOverride;
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Called on BSP load to load the map edit values for all entities.
+//-----------------------------------------------------------------------------
+void MapEntity_LoadMapEditValues()
+{
+	VPROF("MapEntity_LoadMapEditValues");
+
+	g_bShouldMapOverride = false;
+
+	if (g_pMapReplaceKV) {
+		g_pMapReplaceKV->deleteThis();
+		g_pMapReplaceKV = NULL;
+	}
+
+	char fileName[MAX_PATH];
+	sprintf_s(fileName, MAX_PATH, "mapreplace/%s.txt", STRING(gpGlobals->mapname));
+
+#ifdef _DEBUG
+	ConColorMsg(Color(255, 0, 0, 255), "Trying to load map edit values from %s\n", fileName);
+#endif
+
+	g_pMapReplaceKV = new KeyValues("MapReplace");
+	if (g_pMapReplaceKV->LoadFromFile(filesystem, fileName, "MOD")) 
+	{
+#ifdef _DEBUG
+		ConColorMsg(Color(255, 0, 0, 255), "Loaded map edit values from %s\n", fileName);
+#endif
+
+		g_bShouldMapOverride = true;
+	}
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Called on BSP load to edit entity data block with the map edit values.
+// Input  : pEntData - Pointer to the entity data block to parse and edit.
+//-----------------------------------------------------------------------------
+bool MapEntity_OverrideEntData(const char* pEntData, CBaseEntity* pEnt)
+{
+	VPROF("MapEntity_OverrideEntData");
+
+	if (MapEntity_ShouldMapOverride())
+	{
+		CEntityMapData entData((char*)pEntData);
+
+		char szClassname[MAPKEY_MAXLENGTH];
+		if (!entData.ExtractValue("classname", szClassname))
+			return false;
+
+		KeyValues* classnameKv = g_pMapReplaceKV->FindKey(szClassname);
+		if (!classnameKv)
+			return false;
+
+		FOR_EACH_SUBKEY(classnameKv, kv)
+		{
+			const char* pKey = kv->GetName();
+			if (pKey && *pKey)
+			{
+				const char* pValue = kv->GetString();
+				if (pValue && *pValue)
+				{
+					pEnt->KeyValue(pKey, pValue);
+				}
+			}
+		}
+		return true;
+	}
+	return false;
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Called on BSP load to override the entity data block's classname with a new map edit value.
+// Input  : pEntData - Pointer to the entity data block to parse and edit.
+//-----------------------------------------------------------------------------
+bool MapEntity_OverrideEntClass(const char* pEntData, char outSzClassname[MAPKEY_MAXLENGTH])
+{
+	VPROF("MapEntity_OverrideEntClass");
+
+	if (MapEntity_ShouldMapOverride())
+	{
+		CEntityMapData entData((char*)pEntData);
+
+		char szClassname[MAPKEY_MAXLENGTH];
+		if (!entData.ExtractValue("classname", szClassname))
+			return false;
+
+		KeyValues* classnameKv = g_pMapReplaceKV->FindKey(szClassname);
+		if (!classnameKv) 
+			return false;
+
+		const char* pNewClassname = classnameKv->GetString("classname", "\0");
+		if (pNewClassname && *pNewClassname)
+		{
+			Q_strncpy(outSzClassname, pNewClassname, Q_strlen(pNewClassname)+1);
+			return true;
+		}
+	}
+	return false;
 }
 
 //-----------------------------------------------------------------------------
@@ -555,9 +666,19 @@ const char *MapEntity_ParseEntity(CBaseEntity *&pEntity, const char *pEntData, I
 		Error( "classname missing from entity!\n" );
 	}
 
+	if (MapEntity_OverrideEntClass(pEntData, className)) 
+	{
+#ifdef _DEBUG
+		ConColorMsg(Color(255, 0, 0, 255), "Modified a classname of a map entity\n");
+#endif
+	}
+
 	pEntity = NULL;
 	if ( !pFilter || pFilter->ShouldCreateEntity( className ) )
 	{
+#ifdef _DEBUG
+		ConColorMsg(Color(255, 255, 0, 255), "MapEntity_ParseEntity: Creating entity with classname {%s}\n", className);
+#endif
 		//
 		// Construct via the LINK_ENTITY_TO_CLASS factory.
 		//
@@ -572,6 +693,12 @@ const char *MapEntity_ParseEntity(CBaseEntity *&pEntity, const char *pEntData, I
 		if (pEntity != NULL)
 		{
 			pEntity->ParseMapData(&entData);
+			if (MapEntity_OverrideEntData(pEntData, pEntity))
+			{
+#ifdef _DEBUG
+				ConColorMsg(Color(255, 0, 0, 255), "Modified data of a map entity\n");
+#endif
+			}
 		}
 		else
 		{
