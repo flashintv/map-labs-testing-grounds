@@ -1,0 +1,8 @@
+"MapReplace"
+{
+	"prop_vehicle_jeep"
+	{
+		"classname"	"prop_vehicle_airboat"
+		"model"		"models/airboat.mdl"
+	}
+}

@@ -1,0 +1,7 @@
+"MapReplace"
+{
+	"prop_dynamic"
+	{
+		"model"		"models/gman.mdl"
+	}
+}
